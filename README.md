@@ -1,10 +1,9 @@
-# Gossip Proto
+# gossip_proto
 
-A zero-dependency Python CLI tool.
-
-## Usage
+Gossip protocol with membership, failure detection, data dissemination
 
 ```bash
-python gossip_proto.py test
-python gossip_proto.py demo
+python3 gossip_proto.py test
 ```
+
+Zero deps. Python 3.8+.
