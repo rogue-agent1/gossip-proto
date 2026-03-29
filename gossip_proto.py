@@ -1,137 +1,60 @@
 #!/usr/bin/env python3
-"""gossip_proto - Gossip protocol simulation for membership and state dissemination."""
-import sys, random, time
+"""gossip_proto - Gossip protocol simulation for distributed state propagation."""
+import sys, random
 
-class Member:
-    ALIVE, SUSPECT, DEAD = "alive", "suspect", "dead"
-    
+class Node:
     def __init__(self, node_id):
         self.id = node_id
-        self.state = self.ALIVE
-        self.heartbeat = 0
-        self.timestamp = time.time()
+        self.state = {}
+        self.peers = []
+        self.version = {}
+    def update(self, key, value):
+        self.version[key] = self.version.get(key, 0) + 1
+        self.state[key] = (value, self.version[key], self.id)
+    def gossip_digest(self):
+        return {k: (v[1], v[2]) for k, v in self.state.items()}
+    def receive_gossip(self, digest, sender):
+        updates_needed = []
+        for key, (ver, origin) in digest.items():
+            my = self.state.get(key)
+            if my is None or my[1] < ver:
+                updates_needed.append(key)
+        return updates_needed
+    def apply_updates(self, updates):
+        for key, (value, version, origin) in updates.items():
+            my = self.state.get(key)
+            if my is None or my[1] < version:
+                self.state[key] = (value, version, origin)
+                self.version[key] = version
 
-class GossipNode:
-    def __init__(self, node_id, fanout=2):
-        self.id = node_id
-        self.members = {node_id: Member(node_id)}
-        self.fanout = fanout
-        self.data = {}  # key -> (value, version)
-        self.round = 0
-    
-    def join(self, seed_state):
-        """Join cluster using seed node's state."""
-        for mid, m in seed_state.items():
-            if mid not in self.members:
-                self.members[mid] = Member(mid)
-                self.members[mid].heartbeat = m.heartbeat
-    
-    def heartbeat(self):
-        self.members[self.id].heartbeat += 1
-        self.members[self.id].timestamp = time.time()
-        self.round += 1
-    
-    def select_targets(self):
-        peers = [m for m in self.members if m != self.id and self.members[m].state != Member.DEAD]
-        return random.sample(peers, min(self.fanout, len(peers)))
-    
-    def prepare_digest(self):
-        return {mid: {"heartbeat": m.heartbeat, "state": m.state, "data": dict(self.data)}
-                for mid, m in self.members.items()}
-    
-    def merge_digest(self, digest):
-        updates = 0
-        for mid, info in digest.items():
-            if mid not in self.members:
-                self.members[mid] = Member(mid)
-                updates += 1
-            m = self.members[mid]
-            if info["heartbeat"] > m.heartbeat:
-                m.heartbeat = info["heartbeat"]
-                m.state = info["state"]
-                m.timestamp = time.time()
-                updates += 1
-            # Merge data
-            for k, (v, ver) in info.get("data", {}).items():
-                if k not in self.data or ver > self.data[k][1]:
-                    self.data[k] = (v, ver)
-                    updates += 1
-        return updates
-    
-    def set_data(self, key, value):
-        ver = self.data.get(key, (None, 0))[1] + 1
-        self.data[key] = (value, ver)
-    
-    def detect_failures(self, timeout=5):
-        now = time.time()
-        for mid, m in self.members.items():
-            if mid == self.id:
-                continue
-            if m.state == Member.ALIVE and now - m.timestamp > timeout:
-                m.state = Member.SUSPECT
-            elif m.state == Member.SUSPECT and now - m.timestamp > timeout * 2:
-                m.state = Member.DEAD
-    
-    def alive_members(self):
-        return [m for m in self.members.values() if m.state == Member.ALIVE]
-
-def simulate_gossip(n_nodes=5, rounds=10, seed=42):
-    random.seed(seed)
-    nodes = {i: GossipNode(i) for i in range(n_nodes)}
-    
-    # All nodes know about node 0
-    for i in range(1, n_nodes):
-        nodes[i].join(nodes[0].members)
-    
-    # Node 0 sets some data
-    nodes[0].set_data("config", "v1")
-    
-    convergence = []
-    for r in range(rounds):
-        for nid, node in nodes.items():
-            node.heartbeat()
-            targets = node.select_targets()
-            digest = node.prepare_digest()
-            for tid in targets:
-                nodes[tid].merge_digest(digest)
-        
-        # Check convergence
-        with_data = sum(1 for n in nodes.values() if "config" in n.data)
-        convergence.append(with_data)
-    
-    return convergence
+def simulate(nodes, rounds=10, fanout=2, seed=None):
+    if seed is not None:
+        random.seed(seed)
+    for _ in range(rounds):
+        for node in nodes:
+            targets = random.sample([n for n in nodes if n.id != node.id], min(fanout, len(nodes)-1))
+            for target in targets:
+                digest = node.gossip_digest()
+                needed = target.receive_gossip(digest, node)
+                if needed:
+                    updates = {k: node.state[k] for k in needed if k in node.state}
+                    target.apply_updates(updates)
 
 def test():
-    # Basic gossip
-    n1 = GossipNode(0)
-    n2 = GossipNode(1)
-    n3 = GossipNode(2)
-    
-    n2.join(n1.members)
-    n3.join(n1.members)
-    n1.join(n2.members)
-    n1.join(n3.members)
-    
-    assert len(n1.members) == 3
-    assert len(n2.members) >= 2
-    
-    # Data dissemination
-    n1.set_data("key", "value")
-    digest = n1.prepare_digest()
-    n2.merge_digest(digest)
-    assert n2.data.get("key") == ("value", 1)
-    
-    # Heartbeat
-    n1.heartbeat()
-    assert n1.members[0].heartbeat == 1
-    
-    # Simulation
-    conv = simulate_gossip(5, 10)
-    assert conv[-1] == 5  # All nodes have the data
-    assert conv[0] < 5    # Not all have it in round 1
-    
-    print(f"Convergence: {conv}")
-    print("All tests passed!")
+    nodes = [Node(f"n{i}") for i in range(5)]
+    nodes[0].update("x", 42)
+    nodes[2].update("y", "hello")
+    simulate(nodes, rounds=10, seed=42)
+    # all nodes should have both values
+    for n in nodes:
+        assert n.state.get("x", (None,))[0] == 42, f"{n.id} missing x"
+        assert n.state.get("y", (None,))[0] == "hello", f"{n.id} missing y"
+    # update propagation
+    nodes[4].update("x", 100)
+    simulate(nodes, rounds=10, seed=42)
+    for n in nodes:
+        assert n.state["x"][0] == 100
+    print("OK: gossip_proto")
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "test":

@@ -1,9 +1,11 @@
-# gossip_proto
+# gossip-proto
 
-Gossip protocol with membership, failure detection, data dissemination
+Gossip protocol simulation for distributed state propagation.
+
+## Usage
 
 ```bash
 python3 gossip_proto.py test
 ```
 
-Zero deps. Python 3.8+.
+Zero dependencies. Python 3.8+.
